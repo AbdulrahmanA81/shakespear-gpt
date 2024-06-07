@@ -113,8 +113,6 @@ class FeedForward(nn.Module):
 	def forward(self, x):
 		return self.net(x)
 
-
-
 class Block(nn.Module):
 	""" Transfoermer block: communication followed by computation"""
 
@@ -123,14 +121,14 @@ class Block(nn.Module):
 		head_size = n_embd // n_head
 		self.sa = MultiHeadAttention(n_head, head_size)
 		self.ffwd = FeedForward(n_embd)
+		self.ln1 = nn.LayerNorm(n_embd)
+		self.ln2 = nn.LayerNorm(n_embd)
 
 	def forward(self, x):
-		x = x + self.sa(x)
-		x = x + self.ffwd(x)
+		x = x + self.sa(self.ln1(x))
+		x = x + self.ffwd(self.ln2(x))
 
 		return x
-
-
 
 
 # super simple bigram model
