@@ -7,7 +7,7 @@ batch_size = 32 # how many independent sequences will we process in parallel?
 block_size = 8 # what is the maximum context length for predictions?
 max_iters = 5000
 eval_interval = 500
-learning_rate = 1e-5
+learning_rate = 1e-3
 device = 'cuda' if torch.cuda.is_available() else 'cpu'
 eval_iters = 200
 n_embd = 32
@@ -68,7 +68,7 @@ class Head(nn.Module):
 		self.value = nn.Linear(n_embd, head_size, bias=False)
 		self.register_buffer('tril', torch.tril(torch.ones(block_size, block_size)))
 
-		self.dropout = nn.Dropout(dropout)
+		# self.dropout = nn.Dropout(dropout)
 
 	def forward(self, x):
 		# input of size (batch, time-step, channels)
@@ -80,11 +80,35 @@ class Head(nn.Module):
 		wei = q @ k.transpose(-2,-1) * k.shape[-1]**-0.5 # (B, T, hs) @ (B, hs, T) -> (B, T, T)
 		wei = wei.masked_fill(self.tril[:T, :T] == 0, float('-inf')) # (B, T, T)
 		wei = F.softmax(wei, dim=-1) # (B, T, T)
-		wei = self.dropout(wei)
+		# wei = self.dropout(wei)
 		# perform the weighted aggregation of the values
 		v = self.value(x) # (B,T,hs)
 		out = wei @ v # (B, T, T) @ (B, T, hs) -> (B, T, hs)
 		return out
+	
+class MultiHeadAttention(nn.Module):
+	"""Multipe heads of self attention in parallel"""
+
+	def __init__(self, num_heads, head_size):
+		super().__init__()
+		self.heads = nn.ModuleList([Head(head_size) for _ in range(num_heads)])
+	
+	def forward(self, x):
+		return torch.cat([h(x) for h in self.heads], dim=-1)
+
+class FeedForward(nn.Module):
+	""" A simple linear layer forward by a non-linearity """
+
+	def __init__(sefl, n_embd):
+		super().__init__()
+		sefl.net = nn.Sequential(
+			nn.Linear(n_embd, n_embd),
+			nn.ReLU(),
+		)
+	
+	def forward(self, x):
+		return self.net(x)
+
 
 # super simple bigram model
 class BigramLanguageModel(nn.Module):
@@ -94,17 +118,19 @@ class BigramLanguageModel(nn.Module):
 		# each token directly reads off the logits for the next token from a lookup table
 		self.token_embedding_table = nn.Embedding(vocab_size, n_embd)
 		self.position_embedding_table = nn.Embedding(block_size, n_embd)
-		self.sa_head =  Head(n_embd)
+		self.sa_heads =  MultiHeadAttention(4, n_embd//4) # i.e, 4 heads of 8 dimensional self-attention 
+		self.ffwd = FeedForward(n_embd)
 		self.llm_head = nn.Linear(n_embd, vocab_size)
 
 	def forward(self, idx, targets=None):
 		B, T = idx.shape
 		# idx and targets are both (B,T) tensor of integers
 		tok_emb = self.token_embedding_table(idx) # (B,T,C)
-		pos_emb = self.position_embedding_table(torch.arrange(T, device=device)) #(T, C)
+		pos_emb = self.position_embedding_table(torch.arange(T, device=device)) #(T, C)
 
-		x = tok_emb + pos_emb
-		x = self.sa_head(x)
+		x = tok_emb + pos_emb # (B, T, C)
+		x = self.sa_heads(x)
+		x = self.ffwd(x)
 		logits = self.llm_head(x)
 
 		if targets is None:
